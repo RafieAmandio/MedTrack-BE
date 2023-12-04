@@ -1,5 +1,5 @@
 const mongoose = require("mongoose");
-const { medicalRecordSchema } = require("./MedicalRecord.models");
+const MedicalRecord = require("./MedicalRecord.models");
 
 const patientSchema = new mongoose.Schema({
   name: {
@@ -26,7 +26,10 @@ const patientSchema = new mongoose.Schema({
     type: String,
     required: false,
   },
-  medicalRecord: [medicalRecordSchema],
+  medicalRecord: {
+    type: [mongoose.Schema.Types.ObjectId],
+    requred: false,
+  },
   file: {
     type: String,
     required: false,
