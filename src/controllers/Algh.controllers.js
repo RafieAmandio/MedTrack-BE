@@ -1,6 +1,5 @@
 const AlghServices = require("../services/Algh.services");
 
-
 exports.compare = async function compare(req, res) {
   const file = req.file;
   const filename = req.body.filename;

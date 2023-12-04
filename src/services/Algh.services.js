@@ -1,43 +1,127 @@
 const faceapi = require("face-api.js");
-const { Canvas, Image, ImageData } = require("canvas");
-const { readImage, createCanvas, getContext2dOrThrow } = require("./canvas");
+const { Canvas, Image, ImageData, loadImage } = require("canvas");
+const fs = require("fs");
+const path = require("path");
+const { createTransport } = require("nodemailer");
 
-async function loadFaceApiModel() {
-  await faceapi.nets.tinyFaceDetector.loadFromUri("/models");
-  await faceapi.nets.faceRecognitionNet.loadFromUri("/models");
-}
+async function detectAndCompareFaces(basePhotoPath, intruderPhotoPath) {
+  const modelsPath = path.resolve(__dirname, "../AImodels");
+  faceapi.env.monkeyPatch({ Canvas, Image, ImageData });
 
-async function compareFaces(file1, file2) {
-  await loadFaceApiModel();
+  await faceapi.nets.ssdMobilenetv1.loadFromDisk(modelsPath);
+  await faceapi.nets.tinyFaceDetector.loadFromDisk(modelsPath);
+  await faceapi.nets.faceLandmark68Net.loadFromDisk(modelsPath);
+  await faceapi.nets.faceRecognitionNet.loadFromDisk(modelsPath);
+  await faceapi.nets.faceExpressionNet.loadFromDisk(modelsPath);
 
-  const image1 = await readImage(file1);
-  const image2 = await readImage(file2);
+  const basePhotoImage = await load(basePhotoPath);
+  const intruderPhotoImage = await load(intruderPhotoPath);
 
-  const canvas1 = createCanvas(image1.width, image1.height);
-  const ctx1 = getContext2dOrThrow(canvas1);
-  ctx1.drawImage(image1, 0, 0, image1.width, image1.height);
+  const basePhotoDetection = await faceapi
+    .detectSingleFace(basePhotoImage, new faceapi.TinyFaceDetectorOptions())
+    .withFaceLandmarks()
+    .withFaceDescriptor();
 
-  const canvas2 = createCanvas(image2.width, image2.height);
-  const ctx2 = getContext2dOrThrow(canvas2);
-  ctx2.drawImage(image2, 0, 0, image2.width, image2.height);
+  const intruderPhotoDetection = await faceapi
+    .detectSingleFace(intruderPhotoImage, new faceapi.TinyFaceDetectorOptions())
+    .withFaceLandmarks()
+    .withFaceDescriptor();
 
-  const descriptor1 = await faceapi.allFacesSsdMobilenetv1(canvas1);
-  const descriptor2 = await faceapi.allFacesSsdMobilenetv1(canvas2);
-
-  if (!descriptor1.length || !descriptor2.length) {
-    throw new Error("No faces detected");
+  if (basePhotoDetection) {
+    const { x, y, width, height } = basePhotoDetection.detection.box;
   }
 
-  const distance = faceapi.utils.round(
-    faceapi.utils.computeMeanDistance(
-      descriptor1[0].descriptor,
-      descriptor2[0].descriptor
-    )
-  );
+  if (intruderPhotoDetection) {
+    const { x, y, width, height } = intruderPhotoDetection.detection.box;
+    await renderFace(intruderPhotoImage, x, y, width, height);
+  }
 
-  return distance <= 0.6;
+  if (basePhotoDetection && intruderPhotoDetection) {
+    const distance = faceapi.euclideanDistance(
+      basePhotoDetection.descriptor,
+      intruderPhotoDetection.descriptor
+    );
+    console.log("Euclidean Distance:", distance);
+    return distance;
+  }
 }
 
-module.exports = {
-  compareFaces,
+async function renderFace(image, x, y, width, height) {
+  const canvas = new Canvas(width, height);
+  const context = canvas.getContext("2d");
+
+  context.drawImage(image, x, y, width, height, 0, 0, width, height);
+
+  const buffer = canvas.toBuffer("image/jpeg");
+  fs.writeFileSync("output.jpg", buffer);
+}
+
+async function load(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
+exports.sendEmail = async function sendEmail(toEmail) {
+  await transporter.sendMail({
+    from: "info@smarthomeguardian.com",
+    to: toEmail,
+    subject: "There is Someone Outside",
+    html: `
+      Testing
+      `,
+  });
+};
+
+const transporter = createTransport({
+  host: "smtp-relay.brevo.com",
+  port: 587,
+  auth: {
+    user: "rafieamandio@gmail.com",
+    pass: "EBR4mdYO6sgCNkay",
+  },
+});
+
+function convertBase64ToImage(clientId, base64String) {
+  // Generate a unique filename
+  const tempFolder = "./temp";
+  const fileName = `image_${clientId}_${Date.now()}.png`;
+
+  // Construct the file path
+  const filePath = path.join(tempFolder, fileName);
+
+  try {
+    // Convert base64 to binary
+    const imageBuffer = Buffer.from(base64String, "base64");
+
+    fs.writeFileSync(filePath, imageBuffer, "binary");
+
+    console.log(`Image saved to ${filePath}`);
+    return filePath;
+  } catch (error) {
+    console.error("Error converting base64 to image:", error.message);
+  }
+}
+
+exports.handleJsonMessage = async function handleJsonMessage(jsonMessage) {
+  try {
+    const parsedMessage = JSON.parse(jsonMessage);
+    if (parsedMessage && parsedMessage.clientId && parsedMessage.payload) {
+      const clientId = parsedMessage.clientId;
+      const imageData = parsedMessage.payload;
+
+      // Convert the received base64 data to an image
+      const FileImage = convertBase64ToImage(clientId, imageData);
+      detectAndCompareFaces(FileImage, "./brad-pitt.jpg");
+    } else {
+      console.error(
+        "Invalid JSON message format. Missing clientId or payload."
+      );
+    }
+  } catch (error) {
+    console.error("Error parsing JSON message:", error.message);
+  }
 };
